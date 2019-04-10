@@ -4,47 +4,41 @@
 #include <linux/init.h>
 #include <linux/gpio.h> 
 #include <linux/kthread.h>
+#include <linux/sysfs.h>
 #include <linux/delay.h>
 
 #define LED 18
 
 static struct task_struct *task;
 static struct kobject *kobj;
-enum { FOO_SIZE_MAX = 32 };
-static int foo_size;
-static char foo_tmp[FOO_SIZE_MAX];
+enum { INPUT_SIZE_MAX = 32 };
+static int input_size;
+static char input_tmp[INPUT_SIZE_MAX];
 
 char input[11]="Hello World";
 bool output = 0;
 
 ///////////////////////////////////////////
-//	Read File
+//	sysFs Init
 //////////////////////////////////////////
 
-const char toMorse(char c){
-	int asc = (int)c;
-	asc -= 97;
-
-	return 'c';
+static ssize_t input_show(struct kobject *kobj, struct kobj_attribute *attr, char *buff)
+{
+	strncpy(buff, input_tmp, input_size);
+    return input_size;
 }
 
-static ssize_t foo_show(struct kobject *kobj, struct kobj_attribute *attr, char *buff)
+static ssize_t input_store(struct  kobject *kobj, struct kobj_attribute *attr, const char *buff, size_t count)
 {
-	strncpy(buff, foo_tmp, foo_size);
-    return foo_size;
-}
-
-static ssize_t foo_store(struct  kobject *kobj, struct kobj_attribute *attr, const char *buff, size_t count)
-{
-	foo_size = min(count, (size_t)FOO_SIZE_MAX);
-    strncpy(foo_tmp, buff, foo_size);
-    output = 1;
+	input_size = min(count, (size_t)INPUT_SIZE_MAX);
+    strncpy(input_tmp, buff, input_size);
+	output = 1;
     return count;
 }
 
-static struct kobj_attribute foo_attribute = __ATTR(foo, S_IRUGO | S_IWUSR, foo_show, foo_store);
+static struct kobj_attribute input_attribute = __ATTR(input, S_IRUGO | S_IWUSR, input_show, input_store);
 
-static struct attribute *attrs[] = { &foo_attribute.attr, NULL, };
+static struct attribute *attrs[] = { &input_attribute.attr, NULL, };
 
 static struct attribute_group attr_group = { .attrs = attrs, };
 
@@ -199,32 +193,44 @@ void morse_decode(char data){
 //Main Thread
 ///////////////////////////////////////////
 int morse_thread(void *data){
-	int i = 0;
-
-  	while(1) {
+	int i;
+	while((!kthread_should_stop())) {
   		if(output) {
-	  		while(i < 5){
-	    		if (kthread_should_stop()) break;
-		    	printk(KERN_INFO "char: %c\n", input[i]);
-		    	printk(KERN_INFO "file: %c size: %i\n", foo_tmp[i], foo_size);
-		    	morse_decode(input[i]);
-		   		i++;
-	   		}
 	   		i=0;
-	   		output = 0;
+	  		while(i < (input_size - 1)){  
+	  			if(input_tmp[i] == '/')i++;
+	   			if(input_tmp[0] == '/'){			
+			    	printk(KERN_INFO "letter: %c state: %i/%i\n" , input_tmp[i], i, input_size - 2);
+			    	morse_decode(input_tmp[i]);
+			    }
+		    	else {
+		    		printk(KERN_INFO "letter: %c state: %i/%i\n" , input_tmp[i], i + 1, input_size -1);
+			    	morse_decode(input_tmp[i]);
+		    	}	
+		    	i++;
+	   		}
+	   		if(input_tmp[0] != '/' )output = 0;
 		    printk(KERN_INFO "\n");
+
 		}
+		msleep(100);
 
   }
   return 0;
 }
 ///////////////////////////////////////////
-//INIT & EXIT
+//MODULE INIT & EXIT
 ///////////////////////////////////////////
 static int __init kernel_init(void){
 	int ret = 0;
 
 	printk(KERN_INFO "%s\n", __func__);
+
+	ret = gpio_request_one(LED, GPIOF_OUT_INIT_LOW, "led");
+	if (ret) {
+		printk(KERN_ERR "Unable to request GPIOs: %d\n", ret);
+		return ret;
+	}
 
 	kobj = kobject_create_and_add("morse", kernel_kobj);
 	if(!kobj) {
@@ -233,12 +239,6 @@ static int __init kernel_init(void){
 	}
 	ret = sysfs_create_group(kobj, &attr_group);
 	if(ret) kobject_put(kobj);
-
-	ret = gpio_request_one(LED, GPIOF_OUT_INIT_LOW, "led");
-	if (ret) {
-		printk(KERN_ERR "Unable to request GPIOs: %d\n", ret);
-		return ret;
-	}
 	
 	task = kthread_run(morse_thread, NULL, "morse");
 	if(IS_ERR(task))
@@ -247,27 +247,24 @@ static int __init kernel_init(void){
 		return 0;
 	}
 
-	printk(KERN_INFO "Morse Started ^.^\n");
-
-	
-
+	printk(KERN_INFO "Epic kernel started and is waiting for new input (echo *msg* >> /sys/kernel/morse/input) ^.^\n");
+	printk(KERN_INFO "If you start your msg with '/', it will repeat it\n");
 	return ret;
 }
 
 static void __exit kernel_exit(void){
 	printk(KERN_INFO "%s\n", __func__);
 
-	gpio_set_value(LED, 0); 
-	
-	gpio_free(LED);
 	kthread_stop(task);
+
+	gpio_free(LED);
 
 	kobject_put(kobj);
 }
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Simon HEIS");
-//english skills are not the yello from tha egg
+//english skills are not the yello from tha egg^^
 MODULE_DESCRIPTION("Basic kernel module using threads. Morse Code via file to GPIOs (LED on Raspberry).");
 
 module_init(kernel_init);
