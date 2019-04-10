@@ -9,8 +9,44 @@
 #define LED 18
 
 static struct task_struct *task;
-char input[11]="Hello World";
+static struct kobject *kobj;
+enum { FOO_SIZE_MAX = 32 };
+static int foo_size;
+static char foo_tmp[FOO_SIZE_MAX];
 
+char input[11]="Hello World";
+bool output = 0;
+
+///////////////////////////////////////////
+//	Read File
+//////////////////////////////////////////
+
+const char toMorse(char c){
+	int asc = (int)c;
+	asc -= 97;
+
+	return 'c';
+}
+
+static ssize_t foo_show(struct kobject *kobj, struct kobj_attribute *attr, char *buff)
+{
+	strncpy(buff, foo_tmp, foo_size);
+    return foo_size;
+}
+
+static ssize_t foo_store(struct  kobject *kobj, struct kobj_attribute *attr, const char *buff, size_t count)
+{
+	foo_size = min(count, (size_t)FOO_SIZE_MAX);
+    strncpy(foo_tmp, buff, foo_size);
+    output = 1;
+    return count;
+}
+
+static struct kobj_attribute foo_attribute = __ATTR(foo, S_IRUGO | S_IWUSR, foo_show, foo_store);
+
+static struct attribute *attrs[] = { &foo_attribute.attr, NULL, };
+
+static struct attribute_group attr_group = { .attrs = attrs, };
 
 
 ///////////////////////////////////////////
@@ -166,14 +202,19 @@ int morse_thread(void *data){
 	int i = 0;
 
   	while(1) {
-  		while(i < 11){
-	    	printk(KERN_INFO "char: %c\n", input[i]);
-	    	morse_decode(input[i]);
-	   		i++;
-   		}
-   		i=0;
-	    printk(KERN_INFO "\n");
-    	if (kthread_should_stop()) break;
+  		if(output) {
+	  		while(i < 5){
+	    		if (kthread_should_stop()) break;
+		    	printk(KERN_INFO "char: %c\n", input[i]);
+		    	printk(KERN_INFO "file: %c size: %i\n", foo_tmp[i], foo_size);
+		    	morse_decode(input[i]);
+		   		i++;
+	   		}
+	   		i=0;
+	   		output = 0;
+		    printk(KERN_INFO "\n");
+		}
+
   }
   return 0;
 }
@@ -185,14 +226,28 @@ static int __init kernel_init(void){
 
 	printk(KERN_INFO "%s\n", __func__);
 
-	ret = gpio_request_one(LED, GPIOF_OUT_INIT_LOW, "led");
+	kobj = kobject_create_and_add("morse", kernel_kobj);
+	if(!kobj) {
+		printk(KERN_INFO "Failed to create file!\n");
+		return 0;
+	}
+	ret = sysfs_create_group(kobj, &attr_group);
+	if(ret) kobject_put(kobj);
 
+	ret = gpio_request_one(LED, GPIOF_OUT_INIT_LOW, "led");
 	if (ret) {
 		printk(KERN_ERR "Unable to request GPIOs: %d\n", ret);
 		return ret;
 	}
 	
 	task = kthread_run(morse_thread, NULL, "morse");
+	if(IS_ERR(task))
+	{
+		printk(KERN_INFO "Init Thread Failed!\n");
+		return 0;
+	}
+
+	printk(KERN_INFO "Morse Started ^.^\n");
 
 	
 
@@ -206,6 +261,8 @@ static void __exit kernel_exit(void){
 	
 	gpio_free(LED);
 	kthread_stop(task);
+
+	kobject_put(kobj);
 }
 
 MODULE_LICENSE("GPL");
