@@ -10,4 +10,4 @@ Useage:
 
 Output in Raspberry (HELLO):
 
-![](.other/videotogif_2019.04.10_13.30.gif)
+![](.other/videotogif_2019.04.10_13.30.20.gif)
